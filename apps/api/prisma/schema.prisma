@@ -1,0 +1,281 @@
+// Схема БД 2K Inventory. Джерело вимог: ТЗ (розділ 10.1) та вкладка INVENTORY у Google Sheets.
+// Облік серійний: кожна одиниця обладнання = окремий рядок Item.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Користувачі ----------
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  STOREKEEPER // працює зі сканером: видача/повернення
+  VIEWER
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  role      UserRole @default(MANAGER)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  movements   Movement[]
+  auditLogs   AuditLog[]
+  respItems   Item[]     @relation("ItemResponsible")
+}
+
+// ---------- Каталог ----------
+
+model Category {
+  id         String  @id @default(cuid())
+  name       String  @unique
+  codePrefix String? // напр. 101 камери, 102 об'єктиви, 103 штативи, 141 монітори
+  parentId   String?
+  parent     Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children   Category[] @relation("CategoryTree")
+  items      Item[]
+}
+
+enum ItemStatus {
+  AVAILABLE
+  RESERVED
+  ISSUED // видано
+  IN_REPAIR
+  WRITTEN_OFF
+  LOST
+}
+
+model Item {
+  id            String     @id @default(cuid())
+  code          String     @unique // код зі складу (напр. 101001), він же в штрих-/QR-коді
+  name          String
+  serialNumber  String?
+  spec          String? // специфікація
+  categoryId    String?
+  category      Category?  @relation(fields: [categoryId], references: [id])
+  locationNote  String? // кімната/кейс з таблиці
+  itemClass     String? // «клас» з таблиці
+  license       String?
+  purchaseDate  DateTime?
+  invoiceNumber String?
+  purchaseUsd   Decimal?   @db.Decimal(12, 2)
+  rentalPrice   Decimal?   @db.Decimal(12, 2) // базова ціна оренди за добу, грн
+  warrantyUntil DateTime?
+  stampNote     String? // «печатка»
+  status        ItemStatus @default(AVAILABLE)
+  responsibleId String?
+  responsible   User?      @relation("ItemResponsible", fields: [responsibleId], references: [id])
+  notes         String?
+  // Зв'язок із рядком у Google Sheets (для синхронізації, крок 8)
+  sheetRow      Int?
+  sheetEditedAt DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  kitLinks     KitItem[]
+  bookingLines BookingLine[]
+  movements    Movement[]
+
+  @@index([categoryId])
+  @@index([status])
+  @@index([serialNumber])
+}
+
+// ---------- Комплекти (кейси) ----------
+
+model Kit {
+  id          String    @id @default(cuid())
+  code        String    @unique // власний код/QR комплекту
+  name        String
+  description String?
+  rentalPrice Decimal?  @db.Decimal(12, 2)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  items       KitItem[]
+  bookingLines BookingLine[]
+}
+
+model KitItem {
+  kitId    String
+  itemId   String
+  quantity Int    @default(1)
+  kit      Kit    @relation(fields: [kitId], references: [id], onDelete: Cascade)
+  item     Item   @relation(fields: [itemId], references: [id])
+
+  @@id([kitId, itemId])
+}
+
+// ---------- Клієнти та проєкти ----------
+
+model Client {
+  id        String    @id @default(cuid())
+  name      String
+  type      String? // агенція / фізособа / ФОП
+  contact   String?
+  phone     String?
+  email     String?
+  taxId     String?
+  notes     String?
+  createdAt DateTime  @default(now())
+  projects  Project[]
+}
+
+enum ProjectStatus {
+  DRAFT
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Project {
+  id        String        @id @default(cuid())
+  number    String        @unique
+  name      String
+  clientId  String?
+  client    Client?       @relation(fields: [clientId], references: [id])
+  status    ProjectStatus @default(DRAFT)
+  startsAt  DateTime
+  endsAt    DateTime
+  location  String?
+  notes     String?
+  createdAt DateTime      @default(now())
+
+  bookings Booking[]
+  invoices Invoice[]
+  expenses Expense[]
+}
+
+// ---------- Бронювання ----------
+
+enum PriceUnit {
+  HOUR
+  DAY
+  PROJECT
+}
+
+model Booking {
+  id        String        @id @default(cuid())
+  projectId String
+  project   Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  startsAt  DateTime
+  endsAt    DateTime
+  createdAt DateTime      @default(now())
+  lines     BookingLine[]
+}
+
+model BookingLine {
+  id        String    @id @default(cuid())
+  bookingId String
+  booking   Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  itemId    String?
+  item      Item?     @relation(fields: [itemId], references: [id])
+  kitId     String?
+  kit       Kit?      @relation(fields: [kitId], references: [id])
+  priceUnit PriceUnit @default(DAY)
+  unitPrice Decimal   @db.Decimal(12, 2)
+  discount  Decimal   @default(0) @db.Decimal(5, 2) // відсотки
+  note      String?
+
+  @@index([itemId])
+  @@index([kitId])
+}
+
+// ---------- Видача / повернення (зі скану) ----------
+
+enum MovementType {
+  ISSUE
+  RETURN
+}
+
+model Movement {
+  id        String       @id @default(cuid())
+  type      MovementType
+  itemId    String
+  item      Item         @relation(fields: [itemId], references: [id])
+  projectId String?
+  userId    String?
+  user      User?        @relation(fields: [userId], references: [id])
+  condition String? // стан при поверненні
+  note      String?
+  scannedAt DateTime     @default(now())
+
+  @@index([itemId, scannedAt])
+  @@index([projectId])
+}
+
+// ---------- Фінанси ----------
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Invoice {
+  id        String        @id @default(cuid())
+  number    String        @unique
+  projectId String
+  project   Project       @relation(fields: [projectId], references: [id])
+  status    InvoiceStatus @default(DRAFT)
+  total     Decimal       @db.Decimal(12, 2)
+  currency  String        @default("UAH")
+  issuedAt  DateTime      @default(now())
+  dueAt     DateTime?
+  paidAt    DateTime?
+  notes     String?
+}
+
+model Expense {
+  id        String   @id @default(cuid())
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  category  String?
+  amount    Decimal  @db.Decimal(12, 2)
+  currency  String   @default("UAH")
+  spentAt   DateTime @default(now())
+  note      String?
+}
+
+// ---------- Журнал і імпорт ----------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  entity    String
+  entityId  String
+  action    String
+  changes   Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+}
+
+model ImportRun {
+  id        String        @id @default(cuid())
+  source    String // напр. Google Sheets INVENTORY
+  startedAt DateTime      @default(now())
+  imported  Int           @default(0)
+  skipped   Int           @default(0)
+  errors    ImportError[]
+}
+
+model ImportError {
+  id        String    @id @default(cuid())
+  runId     String
+  run       ImportRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  sheetRow  Int
+  message   String
+  rawData   Json?
+}
