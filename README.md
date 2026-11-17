@@ -19,7 +19,7 @@ TypeScript скрізь: React + Vite (веб і PWA-сканер), Node.js + Fa
 ```bash
 cp .env.example .env
 npm install
-npm run db:up                 # PostgreSQL у Docker
+npm run db:up                 # PostgreSQL (Docker або локальна, порт 5433)
 cd apps/api
 npx prisma migrate dev --name init   # створить таблиці й згенерує клієнт
 cd ../..
@@ -30,4 +30,16 @@ npm run dev:web               # http://localhost:5173
 ## Статус
 
 - [x] Крок 0: каркас і схема БД (потребує першої міграції на локальній машині)
-- [ ] Крок 1: імпорт INVENTORY із Google Sheets зі звітом про помилки
+- [~] Крок 1: імпорт INVENTORY (CSV) зі звітом про помилки: парсер готовий, запис у БД див. нижче
+
+## Імпорт INVENTORY
+
+Експортуйте вкладку INVENTORY у CSV (файли *.csv не потрапляють у git) і запустіть:
+
+```bash
+cd apps/api
+npm run import:inventory -- "/шлях/до/файлу.csv" --dry   # пробний запуск, БД не чіпає
+npm run import:inventory -- "/шлях/до/файлу.csv"         # імпорт у БД
+```
+
+Звіт з помилками й попередженнями пишеться в `import-report.txt`. Повторний запуск безпечний: позиції оновлюються за кодом.

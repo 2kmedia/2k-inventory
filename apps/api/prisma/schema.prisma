@@ -67,7 +67,7 @@ model Item {
   purchaseDate  DateTime?
   invoiceNumber String?
   purchaseUsd   Decimal?   @db.Decimal(12, 2)
-  rentalPrice   Decimal?   @db.Decimal(12, 2) // базова ціна оренди за добу, грн
+  rentalPrice   Decimal?   @db.Decimal(12, 2) // колонка RENT Cost з таблиці; валюту уточнити (ймовірно USD за добу)
   warrantyUntil DateTime?
   stampNote     String? // «печатка»
   status        ItemStatus @default(AVAILABLE)
