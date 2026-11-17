@@ -1,19 +1,20 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Catalog } from "./Catalog";
+import { Categories } from "./Categories";
+import "./styles.css";
 
 function App() {
-  const [status, setStatus] = useState("перевірка...");
-  useEffect(() => {
-    fetch("/api/health")
-      .then((r) => r.json())
-      .then((d) => setStatus(d.status))
-      .catch(() => setStatus("API недоступний"));
-  }, []);
+  const [tab, setTab] = useState<"catalog" | "categories">("catalog");
   return (
-    <main style={{ fontFamily: "sans-serif", padding: 24 }}>
-      <h1>2K Inventory</h1>
-      <p>Статус API: {status}</p>
-    </main>
+    <>
+      <header>
+        <h1>2K Inventory</h1>
+        <button className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}>Каталог</button>
+        <button className={tab === "categories" ? "active" : ""} onClick={() => setTab("categories")}>Категорії</button>
+      </header>
+      <main>{tab === "catalog" ? <Catalog /> : <Categories />}</main>
+    </>
   );
 }
 
