@@ -13,6 +13,7 @@ export function Catalog() {
   const [data, setData] = useState<ItemsPage | null>(null);
   const [cats, setCats] = useState<Category[]>([]);
   const [selected, setSelected] = useState<Item | null>(null);
+  const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -58,6 +59,9 @@ export function Catalog() {
           <input type="checkbox" checked={noCode} onChange={(e) => resetPage(setNoCode)(e.target.checked)} />
           Лише без коду
         </label>
+        <button className="primary" style={{ marginLeft: "auto" }} onClick={() => setCreating(true)}>
+          + Нова позиція
+        </button>
       </div>
 
       {error && <div className="err">{error}</div>}
@@ -93,11 +97,11 @@ export function Catalog() {
         <button className="ghost" disabled={page >= pages} onClick={() => setPage(page + 1)}>Далі →</button>
       </div>
 
-      {selected && (
+      {(selected || creating) && (
         <ItemDrawer
           item={selected}
           cats={cats}
-          onClose={() => setSelected(null)}
+          onClose={() => { setSelected(null); setCreating(false); }}
           onSaved={() => { load(); api.categories().then(setCats); }}
         />
       )}
@@ -106,33 +110,52 @@ export function Catalog() {
 }
 
 function ItemDrawer({ item, cats, onClose, onSaved }: {
-  item: Item; cats: Category[]; onClose: () => void; onSaved: () => void;
+  item: Item | null; cats: Category[]; onClose: () => void; onSaved: () => void;
 }) {
+  const isNew = item === null;
+  const [code, setCode] = useState("");
   const [f, setF] = useState({
-    name: item.name,
-    serialNumber: item.serialNumber ?? "",
-    spec: item.spec ?? "",
-    categoryId: item.categoryId ?? "",
-    locationNote: item.locationNote ?? "",
-    license: item.license ?? "",
-    invoiceNumber: item.invoiceNumber ?? "",
-    purchaseDate: item.purchaseDate?.slice(0, 10) ?? "",
-    warrantyUntil: item.warrantyUntil?.slice(0, 10) ?? "",
-    purchaseUsd: item.purchaseUsd ?? "",
-    rentalPrice: item.rentalPrice ?? "",
-    status: item.status as string,
-    notes: item.notes ?? "",
+    name: item?.name ?? "",
+    serialNumber: item?.serialNumber ?? "",
+    spec: item?.spec ?? "",
+    categoryId: item?.categoryId ?? "",
+    locationNote: item?.locationNote ?? "",
+    license: item?.license ?? "",
+    invoiceNumber: item?.invoiceNumber ?? "",
+    purchaseDate: item?.purchaseDate?.slice(0, 10) ?? "",
+    warrantyUntil: item?.warrantyUntil?.slice(0, 10) ?? "",
+    purchaseUsd: item?.purchaseUsd ?? "",
+    rentalPrice: item?.rentalPrice ?? "",
+    status: (item?.status ?? "AVAILABLE") as string,
+    notes: item?.notes ?? "",
   });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
 
+  // Для нової позиції: при виборі категорії підставляємо наступний вільний код (якщо код ще не вводили вручну)
+  async function pickCategory(categoryId: string) {
+    setF({ ...f, categoryId });
+    if (isNew && categoryId && !code) {
+      try {
+        const r = await api.nextCode(categoryId);
+        if (r.code) setCode(r.code);
+      } catch { /* підказка коду не критична */ }
+    }
+  }
+
   async function save() {
     setBusy(true); setMsg(null);
     try {
-      await api.updateItem(item.id, f);
-      setMsg({ ok: true, text: "Збережено" });
-      onSaved();
+      if (item) {
+        await api.updateItem(item.id, f);
+        setMsg({ ok: true, text: "Збережено" });
+        onSaved();
+      } else {
+        await api.createItem({ ...f, code });
+        onSaved();
+        onClose();
+      }
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
     } finally {
@@ -143,15 +166,21 @@ function ItemDrawer({ item, cats, onClose, onSaved }: {
   return (
     <div className="drawer-bg" onClick={onClose}>
       <div className="drawer" onClick={(e) => e.stopPropagation()}>
-        <h2>{item.name}</h2>
-        <div style={{ color: "#64748b", fontSize: 13 }}>Код: {item.code}</div>
+        <h2>{item ? item.name : "Нова позиція"}</h2>
+        {item ? (
+          <div style={{ color: "#64748b", fontSize: 13 }}>Код: {item.code}</div>
+        ) : (
+          <label className="field">Код (підставляється за категорією, можна змінити)
+            <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="напр. 101012" />
+          </label>
+        )}
 
         <label className="field">Назва<input value={f.name} onChange={set("name")} /></label>
         <label className="field">Серійний номер<textarea rows={2} value={f.serialNumber} onChange={set("serialNumber")} /></label>
         <label className="field">Специфікація<input value={f.spec} onChange={set("spec")} /></label>
         <div className="row2">
           <label className="field">Категорія
-            <select value={f.categoryId} onChange={set("categoryId")}>
+            <select value={f.categoryId} onChange={(e) => pickCategory(e.target.value)}>
               <option value="">— без категорії —</option>
               {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
@@ -180,7 +209,7 @@ function ItemDrawer({ item, cats, onClose, onSaved }: {
         <label className="field">Нотатки<textarea rows={3} value={f.notes} onChange={set("notes")} /></label>
 
         <div className="actions">
-          <button className="primary" disabled={busy} onClick={save}>Зберегти</button>
+          <button className="primary" disabled={busy || (isNew && (!code.trim() || !f.name.trim()))} onClick={save}>{isNew ? "Створити" : "Зберегти"}</button>
           <button className="ghost" onClick={onClose}>Закрити</button>
         </div>
         {msg && <div className={msg.ok ? "ok" : "err"}>{msg.text}</div>}

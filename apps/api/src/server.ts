@@ -87,16 +87,13 @@ const TEXT_FIELDS = ["name", "serialNumber", "spec", "locationNote", "license", 
 const DECIMAL_FIELDS = ["purchaseUsd", "rentalPrice"];
 const DATE_FIELDS = ["purchaseDate", "warrantyUntil"];
 
-// Код позиції через API не змінюється (етикетки й QR прив'язані до нього)
-app.patch("/api/items/:id", async (req, reply) => {
-  const { id } = req.params as { id: string };
-  const body = (req.body ?? {}) as Record<string, unknown>;
+// Розбір і перевірка полів позиції (спільно для створення й редагування)
+function parseItemFields(body: Record<string, unknown>): { data: Record<string, unknown> } | { error: string } {
   const data: Record<string, unknown> = {};
-
   for (const f of TEXT_FIELDS) {
     if (f in body) {
       const v = String(body[f] ?? "").trim();
-      if (f === "name" && !v) return reply.code(400).send({ error: "Назва обов'язкова" });
+      if (f === "name" && !v) return { error: "Назва обов'язкова" };
       data[f] = v === "" ? null : v;
     }
   }
@@ -105,7 +102,7 @@ app.patch("/api/items/:id", async (req, reply) => {
       const raw = body[f];
       if (raw === null || raw === "") data[f] = null;
       else if (Number.isFinite(Number(raw)) && Number(raw) >= 0) data[f] = Number(raw);
-      else return reply.code(400).send({ error: `Некоректне число: ${f}` });
+      else return { error: `Некоректне число: ${f}` };
     }
   }
   for (const f of DATE_FIELDS) {
@@ -113,19 +110,54 @@ app.patch("/api/items/:id", async (req, reply) => {
       const raw = body[f];
       if (raw === null || raw === "") data[f] = null;
       else if (!Number.isNaN(Date.parse(String(raw)))) data[f] = new Date(String(raw));
-      else return reply.code(400).send({ error: `Некоректна дата: ${f}` });
+      else return { error: `Некоректна дата: ${f}` };
     }
   }
   if ("status" in body) {
-    if (!STATUSES.includes(String(body.status))) return reply.code(400).send({ error: "Некоректний статус" });
+    if (!STATUSES.includes(String(body.status))) return { error: "Некоректний статус" };
     data.status = body.status;
   }
   if ("categoryId" in body) data.categoryId = body.categoryId || null;
+  return { data };
+}
 
+// Наступний вільний код у категорії: максимальний числовий код + 1 (довгі коди >9 цифр ігноруємо)
+app.get("/api/items/next-code", async (req) => {
+  const { categoryId } = req.query as { categoryId?: string };
+  if (!categoryId) return { code: null };
+  const rows = await prisma.item.findMany({ where: { categoryId }, select: { code: true } });
+  const nums = rows.map((r: { code: string }) => r.code).filter((c: string) => /^\d{1,9}$/.test(c)).map(Number);
+  if (nums.length === 0) return { code: null };
+  let candidate = Math.max(...nums) + 1;
+  while (await prisma.item.findUnique({ where: { code: String(candidate) }, select: { id: true } })) candidate++;
+  return { code: String(candidate) };
+});
+
+app.post("/api/items", async (req, reply) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const code = String(body.code ?? "").trim();
+  if (!code) return reply.code(400).send({ error: "Код обов'язковий" });
+  const parsed = parseItemFields({ ...body, name: body.name ?? "" });
+  if ("error" in parsed) return reply.code(400).send({ error: parsed.error });
+  try {
+    return await prisma.item.create({
+      data: { ...parsed.data, code } as never,
+      include: { category: { select: { id: true, name: true } } },
+    });
+  } catch {
+    return reply.code(409).send({ error: `Код ${code} уже існує` });
+  }
+});
+
+// Код позиції через PATCH не змінюється (етикетки й QR прив'язані до нього)
+app.patch("/api/items/:id", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const parsed = parseItemFields((req.body ?? {}) as Record<string, unknown>);
+  if ("error" in parsed) return reply.code(400).send({ error: parsed.error });
   try {
     return await prisma.item.update({
       where: { id },
-      data,
+      data: parsed.data,
       include: { category: { select: { id: true, name: true } } },
     });
   } catch {
