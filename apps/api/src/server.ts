@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { PrismaClient } from "@prisma/client";
+import { registerProjectRoutes } from "./projects.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true });
@@ -157,13 +158,15 @@ app.patch("/api/items/:id", async (req, reply) => {
   try {
     return await prisma.item.update({
       where: { id },
-      data: parsed.data,
+      data: parsed.data as never,
       include: { category: { select: { id: true, name: true } } },
     });
   } catch {
     return reply.code(404).send({ error: "Позицію не знайдено" });
   }
 });
+
+registerProjectRoutes(app, prisma);
 
 const port = Number(process.env.API_PORT ?? 3000);
 await app.listen({ port, host: "0.0.0.0" });
